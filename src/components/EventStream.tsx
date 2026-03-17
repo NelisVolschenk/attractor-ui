@@ -1,4 +1,5 @@
-import { useRef, useEffect, useState } from 'react'
+import { useRef, useState } from 'react'
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import type { PipelineEvent } from '../api/types'
 import { usePipelineStore } from '../store/pipelines'
 import { ErrorBanner } from './ErrorBanner'
@@ -37,27 +38,25 @@ function getNodeName(event: PipelineEvent): string | null {
 // EventStream component
 // ---------------------------------------------------------------------------
 
+/**
+ * Virtualized event log panel.
+ *
+ * UI-BUG-007: The previous implementation rendered ALL events as DOM nodes.
+ * With 24K+ events from an infinite loop this killed the browser.
+ *
+ * This version uses react-virtuoso to only render the events visible in the
+ * scroll viewport.  The total event count is always shown at the top.
+ * Auto-scroll-to-bottom ("pinned") follows new events until the user scrolls
+ * up manually.
+ */
 export function EventStream() {
   const { activePipelineId, events, selectNode, sseStatus } = usePipelineStore()
   const [pinned, setPinned] = useState(true)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const virtuosoRef = useRef<VirtuosoHandle>(null)
 
   const pipelineEvents: PipelineEvent[] = activePipelineId
     ? (events.get(activePipelineId) ?? [])
     : []
-
-  // Auto-scroll to bottom when new events arrive, if pinned
-  useEffect(() => {
-    if (pinned && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [pipelineEvents.length, pinned])
-
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const el = e.currentTarget
-    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 10
-    setPinned(isAtBottom)
-  }
 
   return (
     <div className="flex flex-col h-full bg-gray-950 overflow-hidden">
@@ -82,40 +81,41 @@ export function EventStream() {
           className={`text-xs ${pinned ? 'text-blue-400' : 'text-gray-500'}`}
           aria-label={pinned ? 'Unpin from bottom' : 'Pin to bottom'}
         >
-          ⬇ {pinned ? 'pinned' : 'unpinned'}
+          ⇓ {pinned ? 'pinned' : 'unpinned'}
         </button>
       </div>
 
-      {/* Event list */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto"
-        onScroll={handleScroll}
-      >
-        {pipelineEvents.length === 0 ? (
-          <div className="p-4 text-gray-500 text-sm">No events yet.</div>
-        ) : (
-          <ul>
-            {pipelineEvents.map((event, i) => {
-              const { icon, colorClass } = getEventStyle(event)
-              const nodeName = getNodeName(event)
-              return (
-                <li
-                  key={i}
-                  className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-900 cursor-pointer text-sm"
-                  onClick={() => selectNode(nodeName)}
-                >
-                  <span className={colorClass}>{icon}</span>
-                  <span className="text-gray-300">{event.event}</span>
-                  {nodeName && (
-                    <span className="text-gray-500 truncate">{nodeName}</span>
-                  )}
-                </li>
-              )
-            })}
-          </ul>
-        )}
-      </div>
+      {/* Event list — virtualized so only visible events hit the DOM */}
+      {pipelineEvents.length === 0 ? (
+        <div className="p-4 text-gray-500 text-sm">No events yet.</div>
+      ) : (
+        <Virtuoso
+          ref={virtuosoRef}
+          className="flex-1"
+          style={{ minHeight: 0 }}
+          data={pipelineEvents}
+          followOutput={pinned ? 'smooth' : false}
+          atBottomStateChange={(atBottom) => setPinned(atBottom)}
+          defaultItemHeight={36}
+          itemContent={(i, event) => {
+            const { icon, colorClass } = getEventStyle(event)
+            const nodeName = getNodeName(event)
+            return (
+              <li
+                key={i}
+                className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-900 cursor-pointer text-sm list-none"
+                onClick={() => selectNode(nodeName)}
+              >
+                <span className={colorClass}>{icon}</span>
+                <span className="text-gray-300">{event.event}</span>
+                {nodeName && (
+                  <span className="text-gray-500 truncate">{nodeName}</span>
+                )}
+              </li>
+            )
+          }}
+        />
+      )}
     </div>
   )
 }
