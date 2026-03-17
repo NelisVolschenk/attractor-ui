@@ -342,6 +342,38 @@ describe('GraphPane', () => {
     expect(polygon?.getAttribute('fill')).not.toBe('white')
   })
 
+  // ---------------------------------------------------------------------------
+  // UI-BUG-017: \b word boundary anchors prevent stroke/fill replacement
+  // ---------------------------------------------------------------------------
+
+  it('UI-BUG-017: edge stroke="black" is replaced with #9ca3af (arrowhead color fix)', async () => {
+    // The old regex used \b anchors that never matched in SVG attribute context.
+    // e.g. /\bstroke="black"\b/g matches ZERO times against real viz.js output
+    // because the trailing \b after the closing " finds no word boundary.
+    mockActivePipelineId.current = 'pipe-1'
+    mockRenderString.mockReturnValue(
+      '<svg><g id="edge1"><title>Start->ExploreIdea</title>' +
+      '<path stroke="black" fill="none" d="M100,100 L200,200"/>' +
+      '<polygon stroke="black" fill="black" points="200,200 190,195 195,190"/>' +
+      '</g></svg>',
+    )
+
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      expect(container.querySelector('svg')).toBeInTheDocument()
+    })
+
+    // Edge path stroke should be lightened — not black
+    const path = container.querySelector('g path')
+    expect(path?.getAttribute('stroke')).toBe('#9ca3af')
+
+    // Arrowhead polygon stroke and fill should be lightened — not black
+    const polygon = container.querySelector('g polygon')
+    expect(polygon?.getAttribute('stroke')).toBe('#9ca3af')
+    expect(polygon?.getAttribute('fill')).toBe('#9ca3af')
+  })
+
   it('calls selectNode when a node g element is clicked', async () => {
     const user = userEvent.setup()
     mockActivePipelineId.current = 'pipe-1'

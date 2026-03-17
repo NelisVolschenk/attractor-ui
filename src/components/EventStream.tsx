@@ -67,8 +67,10 @@ function getRunningNodes(events: PipelineEvent[]): Set<string> {
  * UI-BUG-007: Uses react-virtuoso to only render visible events.
  * UI-FEAT-013: Running stages show a pulsing indicator + elapsed timer.
  */
+const TERMINAL_STATUSES = new Set(['cancelled', 'completed', 'failed'])
+
 export function EventStream() {
-  const { activePipelineId, events, selectNode, sseStatus, questions } = usePipelineStore()
+  const { activePipelineId, events, selectNode, sseStatus, questions, pipelines } = usePipelineStore()
   const [pinned, setPinned] = useState(true)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
 
@@ -81,8 +83,14 @@ export function EventStream() {
     ? (events.get(activePipelineId) ?? [])
     : []
 
-  // Compute currently-running nodes
-  const runningNodes = getRunningNodes(pipelineEvents)
+  // Compute currently-running nodes.
+  // If the pipeline is in a terminal state (cancelled/completed/failed) treat
+  // all nodes as finished — the pulsing indicator and tick timer must stop.
+  const activePipeline = activePipelineId ? pipelines.get(activePipelineId) : undefined
+  const isPipelineTerminal = activePipeline ? TERMINAL_STATUSES.has(activePipeline.status) : false
+  const runningNodes = isPipelineTerminal
+    ? new Set<string>()
+    : getRunningNodes(pipelineEvents)
 
   // Update runningStartTimes when running nodes change (UI-FEAT-013)
   useEffect(() => {

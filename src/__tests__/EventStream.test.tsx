@@ -61,8 +61,9 @@ const mockSelectNode = vi.hoisted(() => vi.fn())
 const mockSseStatus = vi.hoisted(
   () => ({ current: 'connected' as 'connected' | 'reconnecting' | 'disconnected' }),
 )
-import type { QuestionResponse } from '../api/types'
+import type { QuestionResponse, PipelineSummary } from '../api/types'
 const mockQuestions = vi.hoisted(() => ({ current: new Map<string, QuestionResponse[]>() }))
+const mockPipelines = vi.hoisted(() => ({ current: new Map<string, PipelineSummary>() }))
 
 vi.mock('../store/pipelines', () => ({
   usePipelineStore: (selector?: (s: unknown) => unknown) => {
@@ -72,6 +73,7 @@ vi.mock('../store/pipelines', () => ({
       selectNode: mockSelectNode,
       sseStatus: mockSseStatus.current,
       questions: mockQuestions.current,
+      pipelines: mockPipelines.current,
     }
     if (selector) return selector(state)
     return state
@@ -87,6 +89,7 @@ describe('EventStream', () => {
     mockSelectNode.mockClear()
     mockSseStatus.current = 'connected'
     mockQuestions.current = new Map()
+    mockPipelines.current = new Map()
   })
 
   it('shows empty state when no events', () => {
@@ -334,6 +337,44 @@ describe('EventStream', () => {
     // Pulsing indicator should still be present for the running stage
     const pulsingEl = container.querySelector('.animate-pulse')
     expect(pulsingEl).toBeInTheDocument()
+  })
+
+  // ---------------------------------------------------------------------------
+  // UI-BUG-018: Cancel stops pulsing indicator in EventStream
+  // ---------------------------------------------------------------------------
+
+  it('UI-BUG-018: cancelled pipeline does NOT show pulsing indicator even if last event was stage_started', () => {
+    // When a pipeline is cancelled while a stage is running, the stage_started
+    // event remains in the event log. EventStream should NOT show the pulsing
+    // "LLM running" indicator once the pipeline status is terminal.
+    mockActivePipelineId.current = 'pipe-1'
+    mockEvents.current = new Map([
+      [
+        'pipe-1',
+        [
+          { event: 'stage_started', name: 'DraftPlan', index: 0 } as PipelineEvent,
+          // No stage_completed — the stage was interrupted by cancel
+        ],
+      ],
+    ])
+    mockPipelines.current = new Map([
+      [
+        'pipe-1',
+        {
+          id: 'pipe-1',
+          status: 'cancelled',
+          started_at: new Date().toISOString(),
+          completed_nodes: [],
+          current_node: null,
+        },
+      ],
+    ])
+
+    const { container } = render(<EventStream />)
+
+    // Pipeline is cancelled — no pulsing indicator
+    const pulsingEl = container.querySelector('.animate-pulse')
+    expect(pulsingEl).not.toBeInTheDocument()
   })
 
   // ---------------------------------------------------------------------------

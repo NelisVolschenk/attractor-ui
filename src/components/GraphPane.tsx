@@ -58,11 +58,14 @@ function applyDarkTheme(svg: string): string {
   )
   // Catch text elements with no explicit fill (edge labels default to black)
   result = result.replace(/<text\b(?![^>]*fill=)([^>]*?)>/g, '<text fill="#9ca3af"$1>')
-  // Light edge strokes and arrowhead fills
+  // Light edge strokes and arrowhead fills.
+  // NOTE: no \b anchors — the trailing \b after a closing " never matches
+  // because " is a non-word char followed by another non-word char (space / >).
+  // The old \b-anchored regexes matched ZERO times against real viz.js output.
   result = result
-    .replace(/\bstroke="black"\b/g, 'stroke="#9ca3af"')
-    .replace(/\bstroke="#000000"\b/g, 'stroke="#9ca3af"')
-    .replace(/\bfill="black"\b/g, 'fill="#9ca3af"')
+    .replace(/stroke="black"/g, 'stroke="#9ca3af"')
+    .replace(/stroke="#000000"/g, 'stroke="#9ca3af"')
+    .replace(/fill="black"/g, 'fill="#9ca3af"')
   return result
 }
 

@@ -288,6 +288,113 @@ describe('HumanInteraction', () => {
     expect(mockGetNodeResponse).not.toHaveBeenCalled()
   })
 
+  // ---------------------------------------------------------------------------
+  // UI-FEAT-015: Response tab / Full History tab in PreviousNodeResponse
+  // ---------------------------------------------------------------------------
+
+  it('UI-FEAT-015: free_text question shows Response and Full History tabs when content has separator', async () => {
+    mockActivePipelineId.current = 'pipe-1'
+    const question: QuestionResponse = {
+      qid: 'q-ft',
+      text: 'What direction?',
+      question_type: 'free_text',
+      options: [],
+      created_at: new Date().toISOString(),
+    }
+    mockQuestions.current = new Map([['pipe-1', [question]]])
+    mockPipelines.current = new Map([
+      [
+        'pipe-1',
+        {
+          id: 'pipe-1',
+          status: 'running',
+          started_at: new Date().toISOString(),
+          completed_nodes: ['ExploreIdea'],
+          current_node: null,
+        },
+      ],
+    ])
+    const fullContent = '[tool_call] analyze\n[tool_result] done\n---\nHere is the LLM summary.'
+    mockGetNodeResponse.mockResolvedValue({ content: fullContent })
+
+    render(<HumanInteraction />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /response/i })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: /full history/i })).toBeInTheDocument()
+    })
+  })
+
+  it('UI-FEAT-015: free_text question Response tab shows extracted response (not full history)', async () => {
+    mockActivePipelineId.current = 'pipe-1'
+    const question: QuestionResponse = {
+      qid: 'q-ft',
+      text: 'What direction?',
+      question_type: 'free_text',
+      options: [],
+      created_at: new Date().toISOString(),
+    }
+    mockQuestions.current = new Map([['pipe-1', [question]]])
+    mockPipelines.current = new Map([
+      [
+        'pipe-1',
+        {
+          id: 'pipe-1',
+          status: 'running',
+          started_at: new Date().toISOString(),
+          completed_nodes: ['ExploreIdea'],
+          current_node: null,
+        },
+      ],
+    ])
+    const fullContent = '[tool_call] analyze\n[tool_result] done\n---\nHere is the LLM summary.'
+    mockGetNodeResponse.mockResolvedValue({ content: fullContent })
+
+    render(<HumanInteraction />)
+
+    await waitFor(() => {
+      // Should show the extracted response (not full content with tool calls)
+      expect(screen.getByText('Here is the LLM summary.')).toBeInTheDocument()
+      expect(screen.queryByText('[tool_call] analyze')).not.toBeInTheDocument()
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // UI-BUG-018: Cancel disables submit in HumanInteraction
+  // ---------------------------------------------------------------------------
+
+  it('UI-BUG-018: submit button is disabled when pipeline is cancelled', () => {
+    mockActivePipelineId.current = 'pipe-1'
+    const question: QuestionResponse = {
+      qid: 'q-1',
+      text: 'Do you want to proceed?',
+      question_type: 'confirmation',
+      options: [],
+      created_at: '2024-01-01T00:00:00Z',
+    }
+    mockQuestions.current = new Map([['pipe-1', [question]]])
+    mockPipelines.current = new Map([
+      [
+        'pipe-1',
+        {
+          id: 'pipe-1',
+          status: 'cancelled',
+          started_at: new Date().toISOString(),
+          completed_nodes: [],
+          current_node: null,
+        },
+      ],
+    ])
+
+    render(<HumanInteraction />)
+
+    // When pipeline is cancelled, all submit/answer buttons should be disabled
+    const yesBtn = screen.getByRole('button', { name: /yes/i })
+    expect(yesBtn).toBeDisabled()
+    const noBtn = screen.getByRole('button', { name: /no/i })
+    expect(noBtn).toBeDisabled()
+  })
+
   it('has orange pulsing border when question is pending', () => {
     mockActivePipelineId.current = 'pipe-1'
     const question: QuestionResponse = {

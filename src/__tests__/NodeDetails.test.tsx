@@ -166,6 +166,65 @@ describe('NodeDetails', () => {
     expect(screen.getByText(/waiting for response/i)).toBeInTheDocument()
   })
 
+  // ---------------------------------------------------------------------------
+  // UI-FEAT-015: Response tab / Full History tab
+  // ---------------------------------------------------------------------------
+
+  it('UI-FEAT-015: shows Response and Full History tabs when content has a separator', async () => {
+    mockSelectedNodeId.current = 'ExploreIdea'
+    mockActivePipelineId.current = 'pipe-1'
+    mockEvents.current = new Map([
+      [
+        'pipe-1',
+        [
+          {
+            event: 'stage_completed',
+            name: 'ExploreIdea',
+            index: 0,
+            duration: { __duration_ms: 5000 },
+          } as PipelineEvent,
+        ],
+      ],
+    ])
+    const fullContent = '[tool_call] read_files\n[tool_result] ...\n---\nHere is my final analysis.'
+    mockGetNodeResponse.mockResolvedValue({ content: fullContent })
+
+    render(<NodeDetails />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /response/i })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: /full history/i })).toBeInTheDocument()
+    })
+  })
+
+  it('UI-FEAT-015: Response tab is active by default and shows extracted response', async () => {
+    mockSelectedNodeId.current = 'ExploreIdea'
+    mockActivePipelineId.current = 'pipe-1'
+    mockEvents.current = new Map([
+      [
+        'pipe-1',
+        [
+          {
+            event: 'stage_completed',
+            name: 'ExploreIdea',
+            index: 0,
+            duration: { __duration_ms: 5000 },
+          } as PipelineEvent,
+        ],
+      ],
+    ])
+    const fullContent = '[tool_call] read_files\n[tool_result] ...\n---\nHere is my final analysis.'
+    mockGetNodeResponse.mockResolvedValue({ content: fullContent })
+
+    render(<NodeDetails />)
+
+    await waitFor(() => {
+      // Default tab shows the extracted last response, not the full content
+      expect(screen.getByText('Here is my final analysis.')).toBeInTheDocument()
+      expect(screen.queryByText('[tool_call] read_files')).not.toBeInTheDocument()
+    })
+  })
+
   it('shows error message for failed nodes', () => {
     mockSelectedNodeId.current = 'my-node'
     mockActivePipelineId.current = 'pipe-1'

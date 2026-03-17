@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { PipelineEvent } from '../api/types'
 import { getNodeResponse } from '../api/client'
 import { usePipelineStore } from '../store/pipelines'
+import { extractLastResponse } from '../utils/responseParser'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -52,12 +53,67 @@ const STATUS_BADGE_CLASSES: Record<NodeStatus, string> = {
 }
 
 // ---------------------------------------------------------------------------
+// ResponseTabs — "Response" / "Full History" tabbed view (UI-FEAT-015)
+// ---------------------------------------------------------------------------
+
+interface ResponseTabsProps {
+  content: string
+  activeTab: 'response' | 'history'
+  onTabChange: (tab: 'response' | 'history') => void
+}
+
+function ResponseTabs({ content, activeTab, onTabChange }: ResponseTabsProps) {
+  const extracted = extractLastResponse(content)
+  // Only show tabs if the content differs (i.e. there was a separator)
+  const hasSeparator = extracted !== content.trim()
+
+  const displayContent = activeTab === 'response' ? extracted : content
+
+  return (
+    <div>
+      {hasSeparator && (
+        <div className="flex gap-1 mb-1" role="tablist">
+          <button
+            role="tab"
+            aria-selected={activeTab === 'response'}
+            className={`px-2 py-0.5 text-xs rounded ${
+              activeTab === 'response'
+                ? 'bg-blue-700 text-white'
+                : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+            }`}
+            onClick={() => onTabChange('response')}
+          >
+            Response
+          </button>
+          <button
+            role="tab"
+            aria-selected={activeTab === 'history'}
+            className={`px-2 py-0.5 text-xs rounded ${
+              activeTab === 'history'
+                ? 'bg-blue-700 text-white'
+                : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+            }`}
+            onClick={() => onTabChange('history')}
+          >
+            Full History
+          </button>
+        </div>
+      )}
+      <pre className="text-xs text-gray-300 whitespace-pre-wrap bg-gray-800 rounded p-2 max-h-80 overflow-y-auto">
+        {displayContent}
+      </pre>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // NodeDetails component
 // ---------------------------------------------------------------------------
 
 export function NodeDetails() {
   const { selectedNodeId, activePipelineId, events } = usePipelineStore()
   const [responseContent, setResponseContent] = useState<string | null | undefined>(undefined)
+  const [activeTab, setActiveTab] = useState<'response' | 'history'>('response')
 
   // Fetch LLM response.md whenever a node is selected (UI-FEAT-012)
   useEffect(() => {
@@ -67,6 +123,7 @@ export function NodeDetails() {
     }
 
     setResponseContent(undefined) // show loading state
+    setActiveTab('response')      // reset to response tab on node change
 
     getNodeResponse(activePipelineId, selectedNodeId)
       .then(({ content }) => setResponseContent(content))
@@ -111,20 +168,15 @@ export function NodeDetails() {
         <div className="text-sm text-red-400">{errorMessage}</div>
       )}
 
-      {/* LLM response section (UI-FEAT-012) */}
+      {/* LLM response section (UI-FEAT-012, UI-FEAT-015) */}
       {(status === 'completed' || status === 'running') && (
         <div className="mt-2">
-          <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
-            Response
-          </h3>
           {responseContent === undefined ? (
             <div className="text-xs text-gray-500 italic">Loading...</div>
           ) : responseContent === null ? (
             <div className="text-xs text-gray-500 italic">Waiting for response...</div>
           ) : (
-            <pre className="text-xs text-gray-300 whitespace-pre-wrap bg-gray-800 rounded p-2 max-h-80 overflow-y-auto">
-              {responseContent}
-            </pre>
+            <ResponseTabs content={responseContent} activeTab={activeTab} onTabChange={setActiveTab} />
           )}
         </div>
       )}

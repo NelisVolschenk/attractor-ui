@@ -2,9 +2,12 @@ import { useState, useEffect } from 'react'
 import type { QuestionResponse } from '../api/types'
 import { submitAnswer, getNodeResponse } from '../api/client'
 import { usePipelineStore } from '../store/pipelines'
+import { extractLastResponse } from '../utils/responseParser'
 
 // ---------------------------------------------------------------------------
 // PreviousNodeResponse — fetch and display the last completed node's LLM output
+// Shows "Response" (extracted) / "Full History" tabs when content has separators
+// (UI-FEAT-014, UI-FEAT-015)
 // ---------------------------------------------------------------------------
 
 interface PreviousNodeResponseProps {
@@ -15,11 +18,13 @@ interface PreviousNodeResponseProps {
 function PreviousNodeResponse({ pipelineId, nodeId }: PreviousNodeResponseProps) {
   const [content, setContent] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [activeTab, setActiveTab] = useState<'response' | 'history'>('response')
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setContent(null)
+    setActiveTab('response')
     getNodeResponse(pipelineId, nodeId)
       .then((result) => {
         if (!cancelled) {
@@ -39,9 +44,44 @@ function PreviousNodeResponse({ pipelineId, nodeId }: PreviousNodeResponseProps)
     )
   }
   if (!content) return null
+
+  const extracted = extractLastResponse(content)
+  const hasSeparator = extracted !== content.trim()
+  const displayContent = activeTab === 'response' ? extracted : content
+
   return (
-    <div className="mb-2 p-2 rounded bg-gray-800 border border-gray-700 text-xs text-gray-300 max-h-40 overflow-y-auto whitespace-pre-wrap">
-      {content}
+    <div className="mb-2">
+      {hasSeparator && (
+        <div className="flex gap-1 mb-1" role="tablist">
+          <button
+            role="tab"
+            aria-selected={activeTab === 'response'}
+            className={`px-2 py-0.5 text-xs rounded ${
+              activeTab === 'response'
+                ? 'bg-blue-700 text-white'
+                : 'bg-gray-800 text-gray-500 hover:text-gray-200'
+            }`}
+            onClick={() => setActiveTab('response')}
+          >
+            Response
+          </button>
+          <button
+            role="tab"
+            aria-selected={activeTab === 'history'}
+            className={`px-2 py-0.5 text-xs rounded ${
+              activeTab === 'history'
+                ? 'bg-blue-700 text-white'
+                : 'bg-gray-800 text-gray-500 hover:text-gray-200'
+            }`}
+            onClick={() => setActiveTab('history')}
+          >
+            Full History
+          </button>
+        </div>
+      )}
+      <div className="p-2 rounded bg-gray-800 border border-gray-700 text-xs text-gray-300 max-h-40 overflow-y-auto whitespace-pre-wrap">
+        {displayContent}
+      </div>
     </div>
   )
 }
@@ -55,9 +95,10 @@ interface QuestionCardProps {
   question: QuestionResponse
   lastCompletedNode: string | null
   onRemove: (pipelineId: string, qid: string) => void
+  isTerminal?: boolean
 }
 
-function QuestionCard({ pipelineId, question, lastCompletedNode, onRemove }: QuestionCardProps) {
+function QuestionCard({ pipelineId, question, lastCompletedNode, onRemove, isTerminal = false }: QuestionCardProps) {
   const [freeTextValue, setFreeTextValue] = useState('')
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
@@ -88,16 +129,23 @@ function QuestionCard({ pipelineId, question, lastCompletedNode, onRemove }: Que
     <div className="rounded-md border border-gray-700 bg-gray-900 p-3 space-y-2">
       <p className="text-sm text-gray-200">{question.text}</p>
 
+      {/* Terminal state notice — pipeline no longer accepts answers */}
+      {isTerminal && (
+        <p className="text-xs text-gray-500 italic">Pipeline is no longer running — answers cannot be submitted.</p>
+      )}
+
       {question.question_type === 'confirmation' && (
         <div className="flex gap-2">
           <button
-            className="px-3 py-1 text-sm rounded bg-green-700 hover:bg-green-600 text-white"
+            disabled={isTerminal}
+            className="px-3 py-1 text-sm rounded bg-green-700 hover:bg-green-600 text-white disabled:opacity-40 disabled:cursor-not-allowed"
             onClick={() => handleSubmit('yes')}
           >
             Yes
           </button>
           <button
-            className="px-3 py-1 text-sm rounded bg-red-700 hover:bg-red-600 text-white"
+            disabled={isTerminal}
+            className="px-3 py-1 text-sm rounded bg-red-700 hover:bg-red-600 text-white disabled:opacity-40 disabled:cursor-not-allowed"
             onClick={() => handleSubmit('no')}
           >
             No
@@ -110,7 +158,8 @@ function QuestionCard({ pipelineId, question, lastCompletedNode, onRemove }: Que
           {question.options.map((opt) => (
             <button
               key={opt.key}
-              className="px-3 py-1 text-sm rounded bg-blue-700 hover:bg-blue-600 text-white"
+              disabled={isTerminal}
+              className="px-3 py-1 text-sm rounded bg-blue-700 hover:bg-blue-600 text-white disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={() => handleSubmit(opt.key)}
             >
               {opt.label}
@@ -127,14 +176,16 @@ function QuestionCard({ pipelineId, question, lastCompletedNode, onRemove }: Que
                 type="checkbox"
                 aria-label={opt.label}
                 checked={selectedKeys.has(opt.key)}
-                onChange={() => toggleKey(opt.key)}
+                onChange={() => !isTerminal && toggleKey(opt.key)}
+                disabled={isTerminal}
                 className="accent-blue-500"
               />
               {opt.label}
             </label>
           ))}
           <button
-            className="mt-2 px-3 py-1 text-sm rounded bg-blue-700 hover:bg-blue-600 text-white"
+            disabled={isTerminal}
+            className="mt-2 px-3 py-1 text-sm rounded bg-blue-700 hover:bg-blue-600 text-white disabled:opacity-40 disabled:cursor-not-allowed"
             onClick={() => handleSubmit(Array.from(selectedKeys).join(','))}
           >
             Submit
@@ -152,11 +203,13 @@ function QuestionCard({ pipelineId, question, lastCompletedNode, onRemove }: Que
             <input
               type="text"
               value={freeTextValue}
+              disabled={isTerminal}
               onChange={(e) => setFreeTextValue(e.target.value)}
-              className="flex-1 px-2 py-1 text-sm rounded bg-gray-800 border border-gray-600 text-gray-200 focus:outline-none focus:border-blue-500"
+              className="flex-1 px-2 py-1 text-sm rounded bg-gray-800 border border-gray-600 text-gray-200 focus:outline-none focus:border-blue-500 disabled:opacity-40"
             />
             <button
-              className="px-3 py-1 text-sm rounded bg-blue-700 hover:bg-blue-600 text-white"
+              disabled={isTerminal}
+              className="px-3 py-1 text-sm rounded bg-blue-700 hover:bg-blue-600 text-white disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={() => handleSubmit(freeTextValue.trim())}
             >
               Submit
@@ -192,6 +245,11 @@ export function HumanInteraction() {
     ? completedNodes[completedNodes.length - 1]
     : null
 
+  // UI-BUG-018: disable submit when pipeline is in a terminal state
+  const isTerminal = activePipeline
+    ? ['cancelled', 'completed', 'failed'].includes(activePipeline.status)
+    : false
+
   return (
     <div
       className={`flex flex-col h-full bg-gray-950 overflow-hidden${hasPending ? ' border-2 border-orange-500 animate-pulse' : ''}`}
@@ -216,6 +274,7 @@ export function HumanInteraction() {
               question={q}
               lastCompletedNode={lastCompletedNode}
               onRemove={removeQuestion}
+              isTerminal={isTerminal}
             />
           ))
         )}
