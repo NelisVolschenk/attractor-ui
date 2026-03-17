@@ -1,9 +1,11 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Hoisted mock functions so they're available in vi.mock factory
 const mockSetActivePipeline = vi.hoisted(() => vi.fn())
+const mockSetPipelineStatus = vi.hoisted(() => vi.fn())
+const mockCancelPipeline = vi.hoisted(() => vi.fn().mockResolvedValue({ status: 'cancelled' }))
 
 // Mock the hooks so they don't run real polling/SSE
 vi.mock('../hooks/usePipelineStatus', () => ({
@@ -20,11 +22,17 @@ vi.mock('../components/NewPipelineDialog', () => ({
     open ? <div data-testid="new-pipeline-dialog"><button onClick={onClose}>Close Dialog</button></div> : null,
 }))
 
+// Mock the API client
+vi.mock('../api/client', () => ({
+  cancelPipeline: mockCancelPipeline,
+}))
+
 // Default store mock — pipelines is empty by default
 const mockStoreState = vi.hoisted(() => ({
   pipelines: new Map(),
   activePipelineId: null as string | null,
   setActivePipeline: mockSetActivePipeline,
+  setPipelineStatus: mockSetPipelineStatus,
 }))
 
 vi.mock('../store/pipelines', () => ({
@@ -103,6 +111,38 @@ describe('Sidebar', () => {
     expect(screen.queryByTestId('new-pipeline-dialog')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /\+ New Pipeline/i }))
     expect(screen.getByTestId('new-pipeline-dialog')).toBeInTheDocument()
+  })
+
+  it('shows cancel button only for running pipelines', () => {
+    mockStoreState.pipelines = new Map([
+      ['running-pipeline-1', { id: 'running-pipeline-1', status: 'running' as const, started_at: '2024-01-04T10:00:00Z', completed_nodes: [], current_node: null }],
+      ['completed-pipeline', { id: 'completed-pipeline', status: 'completed' as const, started_at: '2024-01-03T10:00:00Z', completed_nodes: [], current_node: null }],
+    ])
+    render(<Sidebar />)
+
+    // 'running-pipeline-1'.slice(0, 12) === 'running-pipe'
+    const runningItem = screen.getByText('running-pipe').closest('li')!
+    expect(runningItem.querySelector('[aria-label="Cancel pipeline"]')).toBeInTheDocument()
+
+    // 'completed-pipeline'.slice(0, 12) === 'completed-pi'
+    const completedItem = screen.getByText('completed-pi').closest('li')!
+    expect(completedItem.querySelector('[aria-label="Cancel pipeline"]')).not.toBeInTheDocument()
+  })
+
+  it('calls cancelPipeline and setPipelineStatus when cancel button is clicked', async () => {
+    const user = userEvent.setup()
+    mockStoreState.pipelines = new Map([
+      ['running-pipeline-1', { id: 'running-pipeline-1', status: 'running' as const, started_at: '2024-01-04T10:00:00Z', completed_nodes: [], current_node: null }],
+    ])
+    render(<Sidebar />)
+
+    const cancelBtn = screen.getByLabelText('Cancel pipeline')
+    await user.click(cancelBtn)
+
+    await waitFor(() => {
+      expect(mockCancelPipeline).toHaveBeenCalledWith('running-pipeline-1')
+      expect(mockSetPipelineStatus).toHaveBeenCalledWith('running-pipeline-1', 'cancelled')
+    })
   })
 
   it('shows status dots with appropriate colors for each status', () => {

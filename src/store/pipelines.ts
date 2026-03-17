@@ -35,6 +35,8 @@ interface PipelineActions {
   selectNode: (nodeId: string | null) => void
   /** Set the SSE connection status */
   setSseStatus: (status: 'connected' | 'reconnecting' | 'disconnected') => void
+  /** Update the lifecycle status of a single pipeline (e.g. after cancel) */
+  setPipelineStatus: (pipelineId: string, status: PipelineSummary['status']) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -146,5 +148,15 @@ export const usePipelineStore = create<PipelineState & PipelineActions>((set) =>
 
   setSseStatus: (status) => {
     set({ sseStatus: status })
+  },
+
+  setPipelineStatus: (pipelineId, status) => {
+    set((state) => {
+      const existing = state.pipelines.get(pipelineId)
+      if (!existing) return {}
+      const newPipelines = new Map(state.pipelines)
+      newPipelines.set(pipelineId, { ...existing, status })
+      return { pipelines: newPipelines }
+    })
   },
 }))

@@ -20,7 +20,7 @@ export function GraphPane() {
     setRenderError(null)
     const { dot } = await getGraph(pipelineId)
     const viz = await instance()
-    const svg = viz.renderString(dot)
+    const svg = viz.renderString(dot, { format: 'svg' })
     setSvgContent(svg)
   }, [])
 

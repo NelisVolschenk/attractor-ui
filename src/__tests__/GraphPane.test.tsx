@@ -77,6 +77,19 @@ describe('GraphPane', () => {
     })
   })
 
+  it('calls renderString with { format: "svg" } to produce SVG output', async () => {
+    mockActivePipelineId.current = 'pipe-1'
+
+    render(<GraphPane />)
+
+    await waitFor(() => {
+      expect(mockRenderString).toHaveBeenCalledWith(
+        'digraph { a -> b }',
+        { format: 'svg' },
+      )
+    })
+  })
+
   it('applies green fill to completed nodes', async () => {
     mockActivePipelineId.current = 'pipe-1'
     mockEvents.current = new Map([

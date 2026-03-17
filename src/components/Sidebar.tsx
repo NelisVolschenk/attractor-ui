@@ -3,6 +3,7 @@ import { usePipelineStore } from '../store/pipelines'
 import { usePipelineStatus } from '../hooks/usePipelineStatus'
 import { usePipelineEvents } from '../hooks/usePipelineEvents'
 import { NewPipelineDialog } from './NewPipelineDialog'
+import { cancelPipeline } from '../api/client'
 import type { PipelineStatus } from '../api/types'
 
 const ID_DISPLAY_LENGTH = 12
@@ -25,7 +26,8 @@ function statusDotClass(
 export function Sidebar() {
   const [dialogOpen, setDialogOpen] = useState(false)
 
-  const { pipelines, activePipelineId, setActivePipeline } = usePipelineStore()
+  const { pipelines, activePipelineId, setActivePipeline, setPipelineStatus } =
+    usePipelineStore()
 
   usePipelineStatus()
   usePipelineEvents(activePipelineId)
@@ -34,6 +36,16 @@ export function Sidebar() {
   const sortedPipelines = Array.from(pipelines.values()).sort(
     (a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
   )
+
+  const handleCancel = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    try {
+      await cancelPipeline(id)
+      setPipelineStatus(id, 'cancelled')
+    } catch {
+      // Silently ignore — pipeline may have already finished
+    }
+  }
 
   return (
     <aside className="w-64 min-w-48 bg-gray-900 flex flex-col h-full text-white">
@@ -70,6 +82,24 @@ export function Sidebar() {
                         </span>
                       )}
                     </span>
+                    {pipeline.status === 'running' && (
+                      <button
+                        aria-label="Cancel pipeline"
+                        className="ml-1 flex-shrink-0 text-gray-400 hover:text-red-400 transition-colors"
+                        onClick={(e) => handleCancel(pipeline.id, e)}
+                      >
+                        {/* Stop / square icon */}
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          className="h-4 w-4"
+                          viewBox="0 0 20 20"
+                          fill="currentColor"
+                          aria-hidden="true"
+                        >
+                          <rect x="4" y="4" width="12" height="12" rx="1" />
+                        </svg>
+                      </button>
+                    )}
                   </button>
                 </li>
               )
