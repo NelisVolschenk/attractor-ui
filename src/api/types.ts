@@ -226,6 +226,8 @@ export interface ParallelBranchCompletedEvent {
   index: number
   duration: DurationMs
   success: boolean
+  /** Error message when the branch failed (ATR-BUG-008). Absent for successful branches. */
+  error?: string
 }
 
 export interface ParallelCompletedEvent {
@@ -258,6 +260,22 @@ export interface InterviewTimeoutEvent {
 export interface CheckpointSavedEvent {
   event: 'checkpoint_saved'
   node_id: string
+}
+
+// ---------------------------------------------------------------------------
+// BranchResult — mirrors attractor::handler::fan_in::BranchResult (ATR-BUG-008)
+// Stored as JSON string in context["parallel.results"] by ParallelHandler.
+// ---------------------------------------------------------------------------
+
+export type BranchStatus = 'success' | 'partial_success' | 'retry' | 'skipped' | 'fail'
+
+/** A single parallel branch result from context["parallel.results"]. */
+export interface BranchResult {
+  branch_id: string
+  status: BranchStatus
+  notes: string
+  /** Error message when the branch failed. Absent for successful branches. */
+  error?: string
 }
 
 /** All 15 pipeline event types, discriminated on the `event` field */

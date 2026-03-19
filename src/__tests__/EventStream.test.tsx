@@ -58,6 +58,7 @@ vi.mock('react-virtuoso', () => ({
 const mockActivePipelineId = vi.hoisted(() => ({ current: null as string | null }))
 const mockEvents = vi.hoisted(() => ({ current: new Map<string, PipelineEvent[]>() }))
 const mockSelectNode = vi.hoisted(() => vi.fn())
+const mockSelectNodeWithInstance = vi.hoisted(() => vi.fn())
 const mockSseStatus = vi.hoisted(
   () => ({ current: 'connected' as 'connected' | 'reconnecting' | 'disconnected' }),
 )
@@ -71,6 +72,7 @@ vi.mock('../store/pipelines', () => ({
       activePipelineId: mockActivePipelineId.current,
       events: mockEvents.current,
       selectNode: mockSelectNode,
+      selectNodeWithInstance: mockSelectNodeWithInstance,
       sseStatus: mockSseStatus.current,
       questions: mockQuestions.current,
       pipelines: mockPipelines.current,
@@ -87,6 +89,7 @@ describe('EventStream', () => {
     mockActivePipelineId.current = null
     mockEvents.current = new Map()
     mockSelectNode.mockClear()
+    mockSelectNodeWithInstance.mockClear()
     mockSseStatus.current = 'connected'
     mockQuestions.current = new Map()
     mockPipelines.current = new Map()
@@ -115,9 +118,14 @@ describe('EventStream', () => {
 
     render(<EventStream />)
 
-    expect(screen.getByText('stage_started')).toBeInTheDocument()
-    expect(screen.getByText('stage_completed')).toBeInTheDocument()
-    expect(screen.getAllByText('fetch-data')).toHaveLength(2)
+    // Task 3a: node name first, then short label. Task 3b: collapsed mode
+    // merges start+complete into one row showing the latest label.
+    expect(screen.getByText('fetch-data')).toBeInTheDocument()
+    // Short label for stage_completed: "completed (0.1s)"
+    expect(screen.getByText(/— completed \(0\.1s\)/)).toBeInTheDocument()
+    // Raw event names must NOT appear (we now show short labels)
+    expect(screen.queryByText('stage_started')).not.toBeInTheDocument()
+    expect(screen.queryByText('stage_completed')).not.toBeInTheDocument()
   })
 
   it('applies green class for node_completed (stage_completed) events', () => {
@@ -165,7 +173,8 @@ describe('EventStream', () => {
     expect(redIcon).toBeInTheDocument()
   })
 
-  it('calls selectNode when an event row is clicked', async () => {
+  it('calls selectNodeWithInstance when an event row is clicked', async () => {
+    // Task 4b: clicking an event row calls selectNodeWithInstance (not selectNode)
     const user = userEvent.setup()
     mockActivePipelineId.current = 'pipe-1'
     mockEvents.current = new Map([
@@ -179,12 +188,15 @@ describe('EventStream', () => {
 
     render(<EventStream />)
 
-    const eventRow = screen.getByText('stage_started').closest('li')
+    // In collapsed mode, look for the node name and click its row
+    const nodeNameEl = screen.getByText('process-data')
+    const eventRow = nodeNameEl.closest('li')
     expect(eventRow).toBeInTheDocument()
     await user.click(eventRow!)
 
-    expect(mockSelectNode).toHaveBeenCalledTimes(1)
-    expect(mockSelectNode).toHaveBeenCalledWith('process-data')
+    // Collapsed mode calls selectNodeWithInstance(nodeName, passNumber)
+    expect(mockSelectNodeWithInstance).toHaveBeenCalledTimes(1)
+    expect(mockSelectNodeWithInstance).toHaveBeenCalledWith('process-data', 1)
   })
 
   it('shows warning banner when sseStatus is reconnecting', () => {

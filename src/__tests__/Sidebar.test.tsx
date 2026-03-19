@@ -53,9 +53,11 @@ describe('Sidebar', () => {
     mockStoreState.questions = new Map()
   })
 
-  it('renders the Attractor header', () => {
+  it('renders the New Pipeline button (title removed in demo polish)', () => {
     render(<Sidebar />)
-    expect(screen.getByText('Attractor')).toBeInTheDocument()
+    // Task 5: "Attractor" title has been removed for the demo
+    expect(screen.queryByText('Attractor')).not.toBeInTheDocument()
+    expect(screen.getByText('+ New Pipeline')).toBeInTheDocument()
   })
 
   it('shows empty state when no pipelines exist', () => {

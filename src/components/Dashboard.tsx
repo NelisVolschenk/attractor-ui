@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { GraphPane } from './GraphPane'
 import { EventStream } from './EventStream'
@@ -42,9 +43,10 @@ const TERMINAL_STATUSES = new Set<PipelineStatus>(['cancelled', 'completed', 'fa
 
 interface TerminalBannerProps {
   status: PipelineStatus
+  onDismiss: () => void
 }
 
-function TerminalBanner({ status }: TerminalBannerProps) {
+function TerminalBanner({ status, onDismiss }: TerminalBannerProps) {
   const colorClass =
     status === 'completed'
       ? 'bg-green-900/80 border-green-600 text-green-200'
@@ -54,12 +56,19 @@ function TerminalBanner({ status }: TerminalBannerProps) {
 
   return (
     <div
-      className={`absolute inset-x-0 top-0 z-20 flex items-center justify-center py-2 border-b ${colorClass}`}
+      className={`absolute inset-x-0 top-0 z-20 flex items-center justify-center py-2 border-b pointer-events-none ${colorClass}`}
       aria-live="polite"
     >
-      <span className="text-sm font-semibold capitalize">
+      <span className="text-sm font-semibold capitalize pointer-events-auto">
         Pipeline {status}
       </span>
+      <button
+        aria-label="Dismiss"
+        className="ml-3 text-xs opacity-70 hover:opacity-100 pointer-events-auto"
+        onClick={onDismiss}
+      >
+        ✕
+      </button>
     </div>
   )
 }
@@ -69,16 +78,23 @@ export function Dashboard() {
   const verticalLayout = readLayout(STORAGE_KEY_VERTICAL)
   const topLayout = readLayout(STORAGE_KEY_TOP)
   const bottomLayout = readLayout(STORAGE_KEY_BOTTOM)
+  const [dismissedBannerId, setDismissedBannerId] = useState<string | null>(null)
+
+  // UI-BUG-022: Reset dismissed state when switching pipelines so the banner
+  // reappears for the newly-selected pipeline.
+  useEffect(() => { setDismissedBannerId(null) }, [activePipelineId])
 
   const activePipeline = activePipelineId ? pipelines.get(activePipelineId) : undefined
   const terminalStatus = activePipeline && TERMINAL_STATUSES.has(activePipeline.status)
     ? activePipeline.status
     : null
+  // UI-BUG-022: Allow dismissing the banner; reset when pipeline changes
+  const showBanner = terminalStatus && dismissedBannerId !== activePipelineId
 
   return (
     <div className="relative flex-1 flex flex-col overflow-hidden">
-      {/* Terminal state banner (UI-BUG-016) */}
-      {terminalStatus && <TerminalBanner status={terminalStatus} />}
+      {/* Terminal state banner (UI-BUG-016, UI-BUG-022: dismissible + click-through) */}
+      {showBanner && <TerminalBanner status={terminalStatus} onDismiss={() => setDismissedBannerId(activePipelineId)} />}
 
       <Group
         orientation="vertical"

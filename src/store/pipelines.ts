@@ -11,6 +11,8 @@ interface PipelineState {
   events: Map<string, PipelineEvent[]>
   questions: Map<string, QuestionResponse[]>
   selectedNodeId: string | null
+  /** 1-based pass index for the selected node; null = latest */
+  selectedInstanceIndex: number | null
   sseStatus: 'connected' | 'reconnecting' | 'disconnected'
 }
 
@@ -31,8 +33,10 @@ interface PipelineActions {
   removeQuestion: (pipelineId: string, qid: string) => void
   /** Delete the event list for a pipeline */
   clearPipelineEvents: (pipelineId: string) => void
-  /** Set or clear the selected graph node id */
+  /** Set or clear the selected graph node id (resets instance to latest) */
   selectNode: (nodeId: string | null) => void
+  /** Select a node and a specific pass instance (1-based) */
+  selectNodeWithInstance: (nodeId: string | null, instanceIndex: number | null) => void
   /** Set the SSE connection status */
   setSseStatus: (status: 'connected' | 'reconnecting' | 'disconnected') => void
   /** Update the lifecycle status of a single pipeline (e.g. after cancel) */
@@ -50,6 +54,7 @@ export const usePipelineStore = create<PipelineState & PipelineActions>((set) =>
   events: new Map(),
   questions: new Map(),
   selectedNodeId: null,
+  selectedInstanceIndex: null,
   sseStatus: 'disconnected',
 
   // --- actions ---
@@ -143,7 +148,11 @@ export const usePipelineStore = create<PipelineState & PipelineActions>((set) =>
   },
 
   selectNode: (nodeId) => {
-    set({ selectedNodeId: nodeId })
+    set({ selectedNodeId: nodeId, selectedInstanceIndex: null })
+  },
+
+  selectNodeWithInstance: (nodeId, instanceIndex) => {
+    set({ selectedNodeId: nodeId, selectedInstanceIndex: instanceIndex })
   },
 
   setSseStatus: (status) => {

@@ -178,7 +178,8 @@ describe('GraphPane', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /zoom in/i })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /zoom out/i })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /fit/i })).toBeInTheDocument()
+      // Task 2b: Fit button removed (unreliable); replaced with Reset button
+      expect(screen.getByRole('button', { name: /reset/i })).toBeInTheDocument()
     })
   })
 
@@ -390,5 +391,247 @@ describe('GraphPane', () => {
     await user.click(container.querySelector('g')!)
 
     expect(mockSelectNode).toHaveBeenCalledWith('nodeA')
+  })
+
+  // ---------------------------------------------------------------------------
+  // UI-BUG-021: Parallel branch graph coloring
+  // ---------------------------------------------------------------------------
+
+  it('UI-BUG-021: successful parallel branch node polygon has green fill (#22c55e)', async () => {
+    mockActivePipelineId.current = 'pipe-1'
+    mockEvents.current = new Map([
+      [
+        'pipe-1',
+        [
+          {
+            event: 'parallel_branch_completed',
+            branch: 'FinalReviewOpus',
+            index: 0,
+            duration: { __duration_ms: 500 },
+            success: true,
+          } as PipelineEvent,
+        ],
+      ],
+    ])
+    mockRenderString.mockReturnValue(
+      '<svg><g id="node1"><title>FinalReviewOpus</title><polygon fill="#ffffff" stroke="black" points="100,100 200,100 200,150 100,150"/><text fill="black">FinalReviewOpus</text></g></svg>',
+    )
+
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      const polygon = container.querySelector('g polygon')
+      expect(polygon?.getAttribute('fill')).toBe('#22c55e')
+      const text = container.querySelector('g text')
+      expect(text?.getAttribute('fill')).toBe('#1a1a2e')
+    })
+  })
+
+  it('UI-BUG-021: failed parallel branch node polygon has red fill (#ef4444)', async () => {
+    mockActivePipelineId.current = 'pipe-1'
+    mockEvents.current = new Map([
+      [
+        'pipe-1',
+        [
+          {
+            event: 'parallel_branch_completed',
+            branch: 'FinalReviewGPT',
+            index: 1,
+            duration: { __duration_ms: 300 },
+            success: false,
+            error: 'model error',
+          } as PipelineEvent,
+        ],
+      ],
+    ])
+    mockRenderString.mockReturnValue(
+      '<svg><g id="node1"><title>FinalReviewGPT</title><polygon fill="#ffffff" stroke="black" points="100,100 200,100 200,150 100,150"/><text fill="black">FinalReviewGPT</text></g></svg>',
+    )
+
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      const polygon = container.querySelector('g polygon')
+      expect(polygon?.getAttribute('fill')).toBe('#ef4444')
+      const text = container.querySelector('g text')
+      expect(text?.getAttribute('fill')).toBe('#e2e8f0')
+    })
+  })
+
+  it('UI-BUG-021: multiple parallel branches all get colored independently', async () => {
+    mockActivePipelineId.current = 'pipe-1'
+    mockEvents.current = new Map([
+      [
+        'pipe-1',
+        [
+          {
+            event: 'parallel_branch_completed',
+            branch: 'FinalReviewOpus',
+            index: 0,
+            duration: { __duration_ms: 500 },
+            success: true,
+          } as PipelineEvent,
+          {
+            event: 'parallel_branch_completed',
+            branch: 'FinalReviewGPT',
+            index: 1,
+            duration: { __duration_ms: 300 },
+            success: true,
+          } as PipelineEvent,
+        ],
+      ],
+    ])
+    mockRenderString.mockReturnValue(
+      '<svg>' +
+      '<g id="node1"><title>FinalReviewOpus</title><polygon fill="#ffffff" stroke="black" points="100,100 200,100 200,150 100,150"/><text fill="black">Opus</text></g>' +
+      '<g id="node2"><title>FinalReviewGPT</title><polygon fill="#ffffff" stroke="black" points="100,200 200,200 200,250 100,250"/><text fill="black">GPT</text></g>' +
+      '</svg>',
+    )
+
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      const polygons = container.querySelectorAll('g polygon')
+      // Both parallel branch node polygons should have green fill
+      expect(polygons[0]?.getAttribute('fill')).toBe('#22c55e')
+      expect(polygons[1]?.getAttribute('fill')).toBe('#22c55e')
+    })
+  })
+
+  it('UI-BUG-021: parallel_branch_started colors node yellow (#eab308), completed overrides to green', async () => {
+    // Tests the actual use case: started → completed in the same event list.
+    // The completed event should override the started yellow with green.
+    mockActivePipelineId.current = 'pipe-1'
+    mockEvents.current = new Map([
+      [
+        'pipe-1',
+        [
+          {
+            event: 'parallel_branch_started',
+            branch: 'FinalReviewOpus',
+            index: 0,
+          } as PipelineEvent,
+          {
+            event: 'parallel_branch_completed',
+            branch: 'FinalReviewOpus',
+            index: 0,
+            duration: { __duration_ms: 500 },
+            success: true,
+          } as PipelineEvent,
+        ],
+      ],
+    ])
+    mockRenderString.mockReturnValue(
+      '<svg><g id="node1"><title>FinalReviewOpus</title><polygon fill="#ffffff" stroke="black" points="100,100 200,100 200,150 100,150"/><text fill="black">Opus</text></g></svg>',
+    )
+
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      // Completed should override started — final color is green
+      const polygon = container.querySelector('g polygon')
+      expect(polygon?.getAttribute('fill')).toBe('#22c55e')
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Exit node green on pipeline_completed
+  // ---------------------------------------------------------------------------
+
+  it('colors Exit node polygon green (#22c55e) when pipeline_completed event is present', async () => {
+    // RED: Exit node has no stage_completed event (engine never traverses it),
+    // so without the fix it stays uncolored even after pipeline completes.
+    mockActivePipelineId.current = 'pipe-1'
+    mockEvents.current = new Map([
+      [
+        'pipe-1',
+        [
+          {
+            event: 'stage_completed',
+            name: 'LastStage',
+            index: 0,
+            duration: { __duration_ms: 100 },
+          } as PipelineEvent,
+          {
+            event: 'pipeline_completed',
+            duration: { __duration_ms: 500 },
+            artifact_count: 3,
+          } as PipelineEvent,
+        ],
+      ],
+    ])
+    mockRenderString.mockReturnValue(
+      '<svg>' +
+      '<g id="node1"><title>LastStage</title><polygon fill="#ffffff" stroke="black" points="100,100 200,100 200,150 100,150"/><text fill="black">LastStage</text></g>' +
+      '<g id="node2"><title>Exit</title><polygon fill="#ffffff" stroke="black" points="100,200 200,200 200,250 100,250"/><text fill="black">Exit</text></g>' +
+      '</svg>',
+    )
+
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      const exitGroup = Array.from(container.querySelectorAll('g')).find(
+        (g) => g.querySelector('title')?.textContent === 'Exit',
+      )
+      const polygon = exitGroup?.querySelector('polygon')
+      expect(polygon?.getAttribute('fill')).toBe('#22c55e')
+    })
+  })
+
+  it('colors Exit node green even when it is the only colored node (no stage events before pipeline_completed)', async () => {
+    // Edge case: pipeline_completed arrives but nodeColorKeys would be empty
+    // without the fix, causing an early return before Exit can be colored.
+    mockActivePipelineId.current = 'pipe-1'
+    mockEvents.current = new Map([
+      [
+        'pipe-1',
+        [
+          {
+            event: 'pipeline_completed',
+            duration: { __duration_ms: 100 },
+            artifact_count: 0,
+          } as PipelineEvent,
+        ],
+      ],
+    ])
+    mockRenderString.mockReturnValue(
+      '<svg><g id="node1"><title>Exit</title><polygon fill="#ffffff" stroke="black" points="100,200 200,200 200,250 100,250"/><text fill="black">Exit</text></g></svg>',
+    )
+
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      const exitGroup = Array.from(container.querySelectorAll('g')).find(
+        (g) => g.querySelector('title')?.textContent === 'Exit',
+      )
+      const polygon = exitGroup?.querySelector('polygon')
+      expect(polygon?.getAttribute('fill')).toBe('#22c55e')
+    })
+  })
+
+  it('UI-BUG-021: parallel_branch_started alone colors node yellow (#eab308)', async () => {
+    mockActivePipelineId.current = 'pipe-1'
+    mockEvents.current = new Map([
+      [
+        'pipe-1',
+        [
+          {
+            event: 'parallel_branch_started',
+            branch: 'FinalReviewOpus',
+            index: 0,
+          } as PipelineEvent,
+        ],
+      ],
+    ])
+    mockRenderString.mockReturnValue(
+      '<svg><g id="node1"><title>FinalReviewOpus</title><polygon fill="#ffffff" stroke="black" points="100,100 200,100 200,150 100,150"/><text fill="black">Opus</text></g></svg>',
+    )
+
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      const polygon = container.querySelector('g polygon')
+      expect(polygon?.getAttribute('fill')).toBe('#eab308')
+    })
   })
 })

@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import React from 'react'
 import type { PipelineSummary } from '../api/types'
@@ -215,5 +216,91 @@ describe('Dashboard', () => {
       }
     }
     expect(found).toBe(true)
+  })
+
+  // ---------------------------------------------------------------------------
+  // UI-BUG-022: Terminal banner blocks controls
+  // ---------------------------------------------------------------------------
+
+  it('UI-BUG-022: terminal banner has a dismiss button', () => {
+    mockActivePipelineId.current = 'pipe-1'
+    mockPipelines.current = new Map([
+      [
+        'pipe-1',
+        {
+          id: 'pipe-1',
+          status: 'completed',
+          started_at: new Date().toISOString(),
+          completed_nodes: ['nodeA'],
+          current_node: null,
+        },
+      ],
+    ])
+
+    render(<Dashboard />)
+
+    // Banner should be visible
+    expect(screen.getByText(/pipeline completed/i)).toBeInTheDocument()
+    // Should have a dismiss/close button
+    expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument()
+  })
+
+  it('UI-BUG-022: clicking dismiss button hides the banner', async () => {
+    const user = userEvent.setup()
+    mockActivePipelineId.current = 'pipe-2'
+    mockPipelines.current = new Map([
+      [
+        'pipe-2',
+        {
+          id: 'pipe-2',
+          status: 'completed',
+          started_at: new Date().toISOString(),
+          completed_nodes: ['nodeA'],
+          current_node: null,
+        },
+      ],
+    ])
+
+    render(<Dashboard />)
+
+    // Banner initially visible
+    expect(screen.getByText(/pipeline completed/i)).toBeInTheDocument()
+
+    // Click dismiss
+    await user.click(screen.getByRole('button', { name: /dismiss/i }))
+
+    // Banner should be gone
+    expect(screen.queryByText(/pipeline completed/i)).not.toBeInTheDocument()
+  })
+
+  it('UI-BUG-022: banner container has pointer-events-none, children have pointer-events-auto', () => {
+    mockActivePipelineId.current = 'pipe-3'
+    mockPipelines.current = new Map([
+      [
+        'pipe-3',
+        {
+          id: 'pipe-3',
+          status: 'failed',
+          started_at: new Date().toISOString(),
+          completed_nodes: [],
+          current_node: null,
+        },
+      ],
+    ])
+
+    render(<Dashboard />)
+
+    // The banner container should have pointer-events-none so clicks pass
+    // through to controls underneath
+    const banner = screen.getByText(/pipeline failed/i).closest('[aria-live]')
+    expect(banner).toBeInTheDocument()
+    expect(banner?.className).toContain('pointer-events-none')
+
+    // The text and dismiss button should have pointer-events-auto so they
+    // remain clickable despite the container being click-through
+    const textSpan = screen.getByText(/pipeline failed/i)
+    expect(textSpan.className).toContain('pointer-events-auto')
+    const dismissBtn = screen.getByRole('button', { name: /dismiss/i })
+    expect(dismissBtn.className).toContain('pointer-events-auto')
   })
 })

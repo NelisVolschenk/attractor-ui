@@ -47,11 +47,6 @@ function applyDarkTheme(svg: string): string {
   // Remove Graphviz's white background polygon (UI-BUG-013)
   result = result.replace(/fill="white"/g, 'fill="transparent"')
   // Replace only black text fills with readable medium gray (UI-BUG-014).
-  // The old code replaced ALL text fills with #e2e8f0 (light gray), making node
-  // labels unreadable on colored boxes.  Instead we only target black/#000000
-  // (Graphviz defaults for edge labels and pending-node labels).
-  // applyNodeColorsToSvg will later override colored-node text with the
-  // per-color textFill (dark on green/yellow, light on red).
   result = result.replace(
     /<text([^>]*)fill="(black|#000000)"([^>]*)>/g,
     '<text$1fill="#9ca3af"$3>',
@@ -59,9 +54,6 @@ function applyDarkTheme(svg: string): string {
   // Catch text elements with no explicit fill (edge labels default to black)
   result = result.replace(/<text\b(?![^>]*fill=)([^>]*?)>/g, '<text fill="#9ca3af"$1>')
   // Light edge strokes and arrowhead fills.
-  // NOTE: no \b anchors — the trailing \b after a closing " never matches
-  // because " is a non-word char followed by another non-word char (space / >).
-  // The old \b-anchored regexes matched ZERO times against real viz.js output.
   result = result
     .replace(/stroke="black"/g, 'stroke="#9ca3af"')
     .replace(/stroke="#000000"/g, 'stroke="#9ca3af"')
@@ -71,8 +63,13 @@ function applyDarkTheme(svg: string): string {
 
 /**
  * Apply per-node status colors via DOMParser before setting innerHTML.
+ * Also applies selection outline to the selected node.
  */
-function applyNodeColorsToSvg(svg: string, pipelineEvents: PipelineEvent[]): string {
+function applyNodeColorsToSvg(
+  svg: string,
+  pipelineEvents: PipelineEvent[],
+  selectedNodeId?: string | null,
+): string {
   if (!svg) return svg
 
   const nodeColorKeys = new Map<string, string>()
@@ -80,8 +77,21 @@ function applyNodeColorsToSvg(svg: string, pipelineEvents: PipelineEvent[]): str
     if (event.event === 'stage_completed') nodeColorKeys.set(event.name, 'green')
     else if (event.event === 'stage_started') nodeColorKeys.set(event.name, 'yellow')
     else if (event.event === 'stage_failed') nodeColorKeys.set(event.name, 'red')
+    // UI-BUG-021: Color parallel branch nodes using the `branch` field
+    else if (event.event === 'parallel_branch_started') nodeColorKeys.set(event.branch, 'yellow')
+    else if (event.event === 'parallel_branch_completed') nodeColorKeys.set(event.branch, event.success ? 'green' : 'red')
   }
-  if (nodeColorKeys.size === 0) return svg
+  // Color terminal nodes green when pipeline completes.
+  const hasCompleted = pipelineEvents.some((e) => e.event === 'pipeline_completed')
+  if (hasCompleted) {
+    for (const name of ['Exit', 'Finish', 'End']) {
+      nodeColorKeys.set(name, 'green')
+    }
+  }
+
+  // Need to parse the DOM even if no color keys, because we may have a selection outline
+  const needsParsing = nodeColorKeys.size > 0 || !!selectedNodeId
+  if (!needsParsing) return svg
 
   const parser = new DOMParser()
   const doc = parser.parseFromString(svg, 'image/svg+xml')
@@ -89,25 +99,49 @@ function applyNodeColorsToSvg(svg: string, pipelineEvents: PipelineEvent[]): str
 
   for (const title of svgEl.querySelectorAll('title')) {
     const nodeId = title.textContent?.trim() ?? ''
-    const colorKey = nodeColorKeys.get(nodeId)
-    if (!colorKey) continue
-    const colorEntry = NODE_COLORS[colorKey]
-    if (!colorEntry) continue
     const g = title.closest('g')
     if (!g) continue
 
-    const shape = g.querySelector('polygon, ellipse')
-    if (shape) shape.setAttribute('fill', colorEntry.fill)
-    g.querySelectorAll('text').forEach((t) => t.setAttribute('fill', colorEntry.textFill))
-    // Legacy: keep g.style.fill for tests that check it
-    g.setAttribute('style', `fill: ${colorKey}`)
+    // Apply status color
+    const colorKey = nodeColorKeys.get(nodeId)
+    if (colorKey) {
+      const colorEntry = NODE_COLORS[colorKey]
+      if (colorEntry) {
+        const shape = g.querySelector('polygon, ellipse')
+        if (shape) shape.setAttribute('fill', colorEntry.fill)
+        g.querySelectorAll('text').forEach((t) => t.setAttribute('fill', colorEntry.textFill))
+        // Legacy: keep g.style.fill for tests that check it
+        g.setAttribute('style', `fill: ${colorKey}`)
+      }
+    }
+
+    // Task 2e: Apply strong selection outline to the selected node
+    if (selectedNodeId && nodeId === selectedNodeId) {
+      const shape = g.querySelector('polygon, ellipse, rect')
+      if (shape) {
+        shape.setAttribute('stroke', '#3b82f6')
+        shape.setAttribute('stroke-width', '3')
+      }
+    } else if (selectedNodeId) {
+      // Clear selection outline from non-selected nodes (in case it was previously set)
+      const shape = g.querySelector('polygon, ellipse, rect')
+      if (shape && shape.getAttribute('stroke') === '#3b82f6') {
+        // Reset to default gray edge stroke
+        shape.setAttribute('stroke', '#9ca3af')
+        shape.setAttribute('stroke-width', '1')
+      }
+    }
   }
 
   return new XMLSerializer().serializeToString(doc)
 }
 
-function processSvg(rawSvg: string, pipelineEvents: PipelineEvent[]): string {
-  return applyNodeColorsToSvg(applyDarkTheme(rawSvg), pipelineEvents)
+function processSvg(
+  rawSvg: string,
+  pipelineEvents: PipelineEvent[],
+  selectedNodeId?: string | null,
+): string {
+  return applyNodeColorsToSvg(applyDarkTheme(rawSvg), pipelineEvents, selectedNodeId)
 }
 
 // ---------------------------------------------------------------------------
@@ -121,18 +155,21 @@ function processSvg(rawSvg: string, pipelineEvents: PipelineEvent[]): string {
 // ---------------------------------------------------------------------------
 
 export function GraphPane() {
-  const { activePipelineId, events, selectNode } = usePipelineStore()
+  const { activePipelineId, events, selectNode, selectedNodeId } = usePipelineStore()
   const containerRef = useRef<HTMLDivElement>(null)
   const scalerRef = useRef<HTMLDivElement>(null)
 
-  // Keep events ref for use inside renderDot without adding it as dependency
+  // Keep events + selectedNodeId refs for use inside renderDot without adding as dependencies
   const eventsRef = useRef(events)
   eventsRef.current = events
+  const selectedNodeIdRef = useRef(selectedNodeId)
+  selectedNodeIdRef.current = selectedNodeId
 
   const originalSvgRef = useRef<string>('')
   const [svgContent, setSvgContent] = useState<string>('')
   const [renderError, setRenderError] = useState<string | null>(null)
-  const [scale, setScale] = useState(1.0)
+  // Task 2c: default scale 0.75 (slightly small rather than too big)
+  const [scale, setScale] = useState(0.75)
 
   // Drag state — ALL in refs, zero React state updates, so mouseDown never
   // triggers a re-render that would reset dangerouslySetInnerHTML.
@@ -149,8 +186,8 @@ export function GraphPane() {
     const raw = viz.renderString(injectRankdirTB(dot), { format: 'svg' })
     originalSvgRef.current = raw
     const pipelineEvents = eventsRef.current.get(pipelineId) ?? []
-    setSvgContent(processSvg(raw, pipelineEvents))
-    setScale(1.0)
+    setSvgContent(processSvg(raw, pipelineEvents, selectedNodeIdRef.current))
+    setScale(0.75) // Task 2c: reset to 0.75 on new pipeline load
   }, [])
 
   useEffect(() => {
@@ -166,35 +203,41 @@ export function GraphPane() {
     }
   }, [activePipelineId, renderDot])
 
-  // Recolor SVG when pipeline events change after initial load
+  // Recolor SVG when pipeline events change after initial load, or when selection changes
   useEffect(() => {
     if (!originalSvgRef.current || !activePipelineId) return
     const pipelineEvents = events.get(activePipelineId) ?? []
-    setSvgContent(processSvg(originalSvgRef.current, pipelineEvents))
-  }, [events, activePipelineId])
+    setSvgContent(processSvg(originalSvgRef.current, pipelineEvents, selectedNodeId))
+  }, [events, activePipelineId, selectedNodeId])
 
-  const fitToViewport = useCallback(() => {
+  // Task 2a: Mouse scroll zoom — non-passive listener so preventDefault works
+  useEffect(() => {
     const container = containerRef.current
-    if (!container) { setScale(1.0); return }
-    const svgEl = container.querySelector('svg')
-    if (!svgEl) { setScale(1.0); return }
-    const containerW = container.clientWidth - 32
-    const containerH = container.clientHeight - 32
-    const svgW = svgEl.scrollWidth || svgEl.getBoundingClientRect().width
-    const svgH = svgEl.scrollHeight || svgEl.getBoundingClientRect().height
-    if (svgW <= 0 || svgH <= 0) { setScale(1.0); return }
-    setScale(Math.max(Math.min(containerW / svgW, containerH / svgH, 1.0), 0.1))
+    if (!container) return
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      // Scroll up (negative deltaY) = zoom in; scroll down = zoom out
+      const delta = e.deltaY > 0 ? -0.1 : 0.1
+      setScale((s) => Math.min(Math.max(s + delta, 0.1), 3.0))
+    }
+    container.addEventListener('wheel', handleWheel, { passive: false })
+    return () => container.removeEventListener('wheel', handleWheel)
   }, [])
 
-  // Click handler — NO state updates, just delegates to selectNode
+  // Click handler — select node on click, clear on empty space click
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (isDraggingRef.current) return
       const g = (e.target as Element).closest('g')
       if (g) {
         const title = g.querySelector('title')
-        if (title?.textContent) selectNode(title.textContent)
+        if (title?.textContent) {
+          selectNode(title.textContent)
+          return
+        }
       }
+      // Task 2e: clear selection when clicking empty space
+      selectNode(null)
     },
     [selectNode],
   )
@@ -250,12 +293,12 @@ export function GraphPane() {
         </div>
       )}
 
-      {/* Zoom controls */}
+      {/* Zoom controls — Task 2b: Fit button removed (unreliable with SVG 100%/100%) */}
       <div className="absolute top-2 right-2 z-10 flex gap-1">
         <button
           aria-label="Zoom in" title="Zoom in"
           className="w-7 h-7 rounded bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold flex items-center justify-center"
-          onClick={() => setScale((s) => Math.min(s * 1.25, 6))}
+          onClick={() => setScale((s) => Math.min(s * 1.25, 3.0))}
         >+</button>
         <button
           aria-label="Zoom out" title="Zoom out"
@@ -263,16 +306,16 @@ export function GraphPane() {
           onClick={() => setScale((s) => Math.max(s / 1.25, 0.1))}
         >−</button>
         <button
-          aria-label="Fit graph" title="Fit graph"
+          aria-label="Reset zoom" title="Reset zoom to 75%"
           className="px-2 h-7 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium flex items-center justify-center"
-          onClick={fitToViewport}
-        >Fit</button>
+          onClick={() => setScale(0.75)}
+        >Reset</button>
       </div>
 
-      {/* Scrollable outer container */}
+      {/* Scrollable outer container — Task 2d: p-8 for generous breathing room */}
       <div
         ref={containerRef}
-        className="flex-1 overflow-auto bg-gray-900 p-4"
+        className="flex-1 overflow-auto bg-gray-900 p-8"
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}

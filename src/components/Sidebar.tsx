@@ -87,12 +87,11 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="w-64 min-w-48 bg-gray-900 flex flex-col h-full text-white">
-      <header className="p-4 border-b border-gray-700">
-        <h1 className="text-lg font-bold">Attractor</h1>
-      </header>
+    // Task 1: match bg-gray-950 from Dashboard panel containers
+    <aside className="w-64 min-w-48 bg-gray-950 flex flex-col h-full text-white">
+      {/* Task 5: "Attractor" title removed — header element removed entirely */}
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto pt-2">
         {sortedPipelines.length === 0 ? (
           <p className="text-gray-400 text-sm p-4">No pipelines yet.</p>
         ) : (
