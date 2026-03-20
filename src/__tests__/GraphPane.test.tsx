@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { PipelineEvent } from '../api/types'
@@ -112,8 +112,8 @@ describe('GraphPane', () => {
       expect(container.querySelector('svg')).toBeInTheDocument()
     })
 
-    // The scrollable graph container should have a dark bg
-    const graphContainer = container.querySelector('.overflow-auto')
+    // The graph container should have a dark bg (Fix B: overflow-hidden, not overflow-auto)
+    const graphContainer = container.querySelector('.overflow-hidden')
     expect(graphContainer).toHaveClass('bg-gray-900')
   })
 
@@ -660,6 +660,181 @@ describe('GraphPane', () => {
     const match = style?.transform.match(/scale\(([^)]+)\)/)
     const scaleValue = match ? parseFloat(match[1]) : 0
     expect(scaleValue).toBeGreaterThan(3.0)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Fix: wheel zoom useEffect deps + overflow-hidden
+  // ---------------------------------------------------------------------------
+
+  it('wheel zoom works when pipeline is selected after initial mount with no pipeline (Fix A: useEffect deps)', async () => {
+    // RED: With [] deps, the wheel listener attaches on mount when
+    // containerRef.current is null (component returns early). When the pipeline
+    // is later selected the container renders but the listener never re-attaches.
+    // Fix: change deps to [activePipelineId] so the effect re-runs on selection.
+
+    // Start with no pipeline — component returns early, containerRef.current is null
+    mockActivePipelineId.current = null
+    const { rerender } = render(<GraphPane />)
+    expect(screen.getByText('Select a pipeline')).toBeInTheDocument()
+
+    // Simulate selecting a pipeline (activePipelineId transitions null → 'pipe-1')
+    mockActivePipelineId.current = 'pipe-1'
+    rerender(<GraphPane />)
+
+    // Wait for SVG to finish rendering
+    await waitFor(() => {
+      expect(screen.queryByText('Select a pipeline')).not.toBeInTheDocument()
+    })
+
+    // Grab initial scale from the CSS transform scaler div
+    const scalerDiv = document.querySelector('[style*="scale"]') as HTMLElement
+    expect(scalerDiv).toBeInTheDocument()
+    const initialTransform = scalerDiv.style.transform
+
+    // Dispatch a native wheel event (scroll down → zoom out, deltaY > 0)
+    const graphContainer = document.querySelector('.bg-gray-900') as HTMLElement
+    expect(graphContainer).toBeInTheDocument()
+    fireEvent.wheel(graphContainer, { deltaY: 100 })
+
+    // Scale must change — proves the wheel listener was actually attached
+    await waitFor(() => {
+      expect(scalerDiv.style.transform).not.toBe(initialTransform)
+    })
+  })
+
+  it('graph container has overflow-hidden class (Fix B: prevents browser claiming wheel events)', async () => {
+    // RED: container had overflow-auto which caused the browser to intercept
+    // wheel events for native scrolling before any JS handler could act.
+    // Fix: change to overflow-hidden (panning is handled by mouse drag).
+    mockActivePipelineId.current = 'pipe-1'
+
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      expect(container.querySelector('svg')).toBeInTheDocument()
+    })
+
+    // Must use overflow-hidden, NOT overflow-auto
+    expect(container.querySelector('.overflow-hidden')).toBeInTheDocument()
+    expect(container.querySelector('.overflow-auto')).not.toBeInTheDocument()
+  })
+
+  // ---------------------------------------------------------------------------
+  // Dual trackpad + mouse input handling
+  // ---------------------------------------------------------------------------
+
+  it('trackpad pinch zoom changes scale (ctrlKey+wheel)', async () => {
+    // RED: current wheel handler treats all wheel events as discrete zoom.
+    // Pinch-to-zoom should use a fine-grained delta (0.01 * deltaY) rather than
+    // fixed +/-0.1 steps. After fix: ctrlKey=true → scale changes by -deltaY*0.01.
+    mockActivePipelineId.current = 'pipe-1'
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      expect(container.querySelector('svg')).toBeInTheDocument()
+    })
+
+    const graphContainer = container.querySelector('.bg-gray-900') as HTMLElement
+    const scalerDiv = container.querySelector('[style*="scale"]') as HTMLElement
+    const initialTransform = scalerDiv.style.transform
+
+    // Pinch-to-zoom: ctrlKey=true, small negative deltaY (zooming in)
+    fireEvent.wheel(graphContainer, { deltaY: -20, ctrlKey: true })
+
+    await waitFor(() => {
+      expect(scalerDiv.style.transform).not.toBe(initialTransform)
+    })
+
+    // Scale should have increased (deltaY negative → zoom in)
+    const match = scalerDiv.style.transform.match(/scale\(([^)]+)\)/)
+    const scaleValue = match ? parseFloat(match[1]) : 0
+    expect(scaleValue).toBeGreaterThan(1.5)
+  })
+
+  it('trackpad two-finger scroll changes pan (small pixel-based deltas)', async () => {
+    // RED: current wheel handler always changes scale, never pan.
+    // Trackpad two-finger scroll (ctrlKey=false, small deltaX/deltaY) should
+    // update pan state, reflected as translate() in the CSS transform.
+    mockActivePipelineId.current = 'pipe-1'
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      expect(container.querySelector('svg')).toBeInTheDocument()
+    })
+
+    const graphContainer = container.querySelector('.bg-gray-900') as HTMLElement
+    const scalerDiv = container.querySelector('[style*="scale"]') as HTMLElement
+
+    // Trackpad scroll: small deltas, no ctrlKey
+    fireEvent.wheel(graphContainer, { deltaX: 10, deltaY: 8, ctrlKey: false })
+
+    await waitFor(() => {
+      // Transform should now contain translate() with non-zero values
+      expect(scalerDiv.style.transform).toMatch(/translate\(/)
+    })
+
+    // Should include a non-zero translate (pan moved)
+    const transformStr = scalerDiv.style.transform
+    expect(transformStr).not.toContain('translate(0px, 0px)')
+  })
+
+  it('mouse wheel zoom changes scale (large discrete deltaY)', async () => {
+    // RED: after the new handler, large deltaY events (>=50, deltaX=0) must
+    // still trigger scale changes (mouse wheel zoom), not pan.
+    mockActivePipelineId.current = 'pipe-1'
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      expect(container.querySelector('svg')).toBeInTheDocument()
+    })
+
+    const graphContainer = container.querySelector('.bg-gray-900') as HTMLElement
+    const scalerDiv = container.querySelector('[style*="scale"]') as HTMLElement
+    const initialTransform = scalerDiv.style.transform
+
+    // Mouse wheel: large deltaY, no deltaX, no ctrlKey
+    fireEvent.wheel(graphContainer, { deltaY: 120, deltaX: 0, ctrlKey: false })
+
+    await waitFor(() => {
+      expect(scalerDiv.style.transform).not.toBe(initialTransform)
+    })
+
+    // Scale should have decreased (deltaY > 0 → zoom out)
+    const match = scalerDiv.style.transform.match(/scale\(([^)]+)\)/)
+    const scaleValue = match ? parseFloat(match[1]) : 0
+    expect(scaleValue).toBeLessThan(1.5)
+  })
+
+  it('reset button resets both pan and scale to initial state', async () => {
+    // RED: current Reset only resets scale; pan state not yet implemented.
+    // After fix: Reset should set transform to translate(0px, 0px) scale(1.5).
+    const user = userEvent.setup()
+    mockActivePipelineId.current = 'pipe-1'
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      expect(container.querySelector('svg')).toBeInTheDocument()
+    })
+
+    const graphContainer = container.querySelector('.bg-gray-900') as HTMLElement
+    const scalerDiv = container.querySelector('[style*="scale"]') as HTMLElement
+
+    // Pan by dispatching a two-finger scroll
+    fireEvent.wheel(graphContainer, { deltaX: 50, deltaY: 30, ctrlKey: false })
+
+    await waitFor(() => {
+      expect(scalerDiv.style.transform).not.toContain('translate(0px, 0px)')
+    })
+
+    // Click Reset
+    const reset = screen.getByRole('button', { name: /reset/i })
+    await user.click(reset)
+
+    // Both pan and scale should be reset
+    await waitFor(() => {
+      expect(scalerDiv.style.transform).toContain('translate(0px, 0px)')
+      expect(scalerDiv.style.transform).toContain('1.5')
+    })
   })
 
   it('UI-BUG-021: parallel_branch_started alone colors node yellow (#eab308)', async () => {

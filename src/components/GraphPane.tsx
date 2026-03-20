@@ -170,13 +170,18 @@ export function GraphPane() {
   const [renderError, setRenderError] = useState<string | null>(null)
   // Fix 3: default scale 1.5 for comfortable readability
   const [scale, setScale] = useState(1.5)
+  // Step 1: Pan state for trackpad two-finger scroll and click-drag
+  const [pan, setPan] = useState({ x: 0, y: 0 })
 
   // Drag state — ALL in refs, zero React state updates, so mouseDown never
   // triggers a re-render that would reset dangerouslySetInnerHTML.
   const isDraggingRef = useRef(false)
   const dragStartRef = useRef<{
-    x: number; y: number; scrollLeft: number; scrollTop: number
+    x: number; y: number; startPanX: number; startPanY: number
   } | null>(null)
+  // Keep a ref to pan for use inside mouse handlers without adding pan as dep
+  const panRef = useRef(pan)
+  panRef.current = pan
 
   // Fetch DOT, render SVG, and process in a single setSvgContent call.
   const renderDot = useCallback(async (pipelineId: string) => {
@@ -188,6 +193,7 @@ export function GraphPane() {
     const pipelineEvents = eventsRef.current.get(pipelineId) ?? []
     setSvgContent(processSvg(raw, pipelineEvents, selectedNodeIdRef.current))
     setScale(1.5) // Fix 3: reset to 1.5 on new pipeline load
+    setPan({ x: 0, y: 0 }) // Step 6: reset pan on pipeline change
   }, [])
 
   useEffect(() => {
@@ -210,19 +216,35 @@ export function GraphPane() {
     setSvgContent(processSvg(originalSvgRef.current, pipelineEvents, selectedNodeId))
   }, [events, activePipelineId, selectedNodeId])
 
-  // Task 2a: Mouse scroll zoom — non-passive listener so preventDefault works
+  // Step 2: Dual input wheel handler — distinguishes pinch, trackpad scroll, mouse wheel
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
+
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault()
-      // Scroll up (negative deltaY) = zoom in; scroll down = zoom out
-      const delta = e.deltaY > 0 ? -0.1 : 0.1
-      setScale((s) => Math.min(Math.max(s + delta, 0.1), 5.0))
+
+      if (e.ctrlKey) {
+        // Pinch-to-zoom (trackpad) OR Ctrl+scroll (mouse)
+        // deltaY is small and fractional for pinch
+        const zoomDelta = -e.deltaY * 0.01
+        setScale(s => Math.min(Math.max(s + zoomDelta, 0.1), 5.0))
+      } else if (e.deltaMode === 1 || (Math.abs(e.deltaY) >= 50 && e.deltaX === 0)) {
+        // Discrete mouse wheel: line-based deltaMode OR large Y-only jumps
+        const delta = e.deltaY > 0 ? -0.15 : 0.15
+        setScale(s => Math.min(Math.max(s + delta, 0.1), 5.0))
+      } else {
+        // Trackpad two-finger scroll: small pixel-based deltas on both axes
+        setPan(prev => ({
+          x: prev.x - e.deltaX,
+          y: prev.y - e.deltaY,
+        }))
+      }
     }
+
     container.addEventListener('wheel', handleWheel, { passive: false })
     return () => container.removeEventListener('wheel', handleWheel)
-  }, [])
+  }, [activePipelineId])
 
   // Click handler — select node on click, clear on empty space click
   const handleClick = useCallback(
@@ -242,14 +264,12 @@ export function GraphPane() {
     [selectNode],
   )
 
-  // Drag-to-pan: imperatively set cursor, never call setState.
+  // Step 4: Drag-to-pan using pan state (no native scrolling — container is overflow:hidden)
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const container = containerRef.current
-    if (!container) return
     isDraggingRef.current = false
     dragStartRef.current = {
       x: e.clientX, y: e.clientY,
-      scrollLeft: container.scrollLeft, scrollTop: container.scrollTop,
+      startPanX: panRef.current.x, startPanY: panRef.current.y,
     }
     // Imperatively update cursor — no setState, no re-render
     if (scalerRef.current) scalerRef.current.style.cursor = 'grabbing'
@@ -262,11 +282,10 @@ export function GraphPane() {
     if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
       isDraggingRef.current = true
       e.preventDefault()
-      const container = containerRef.current
-      if (container) {
-        container.scrollLeft = dragStartRef.current.scrollLeft - dx
-        container.scrollTop = dragStartRef.current.scrollTop - dy
-      }
+      setPan({
+        x: dragStartRef.current.startPanX + dx,
+        y: dragStartRef.current.startPanY + dy,
+      })
     }
   }, [])
 
@@ -308,14 +327,14 @@ export function GraphPane() {
         <button
           aria-label="Reset zoom" title="Reset zoom to 150%"
           className="px-2 h-7 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium flex items-center justify-center"
-          onClick={() => setScale(1.5)}
+          onClick={() => { setPan({ x: 0, y: 0 }); setScale(1.5) }}
         >Reset</button>
       </div>
 
       {/* Scrollable outer container — Task 2d: p-8 for generous breathing room */}
       <div
         ref={containerRef}
-        className="flex-1 overflow-auto bg-gray-900 p-8"
+        className="flex-1 overflow-hidden bg-gray-900 p-8"
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -326,7 +345,7 @@ export function GraphPane() {
         <div
           ref={scalerRef}
           style={{
-            transform: `scale(${scale})`,
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
             transformOrigin: '0 0',
             cursor: 'grab',
             display: 'inline-block',
