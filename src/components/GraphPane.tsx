@@ -329,12 +329,38 @@ export function GraphPane() {
       if (e.ctrlKey) {
         // Pinch-to-zoom (trackpad) OR Ctrl+scroll (mouse)
         // deltaY is small and fractional for pinch
+        const rect = container.getBoundingClientRect()
+        const mouseX = e.clientX - rect.left
+        const mouseY = e.clientY - rect.top
         const zoomDelta = -e.deltaY * 0.01
-        setScale(s => Math.min(Math.max(s + zoomDelta, 0.1), 5.0))
+        setScale(prevScale => {
+          const newScale = Math.min(Math.max(prevScale + zoomDelta, 0.1), 5.0)
+          // Zoom toward cursor: keep the graph point under the mouse fixed
+          const graphX = (mouseX - panRef.current.x) / prevScale
+          const graphY = (mouseY - panRef.current.y) / prevScale
+          setPan({
+            x: mouseX - graphX * newScale,
+            y: mouseY - graphY * newScale,
+          })
+          return newScale
+        })
       } else if (e.deltaMode === 1 || (Math.abs(e.deltaY) >= 50 && e.deltaX === 0)) {
         // Discrete mouse wheel: line-based deltaMode OR large Y-only jumps
+        const rect = container.getBoundingClientRect()
+        const mouseX = e.clientX - rect.left
+        const mouseY = e.clientY - rect.top
         const delta = e.deltaY > 0 ? -0.15 : 0.15
-        setScale(s => Math.min(Math.max(s + delta, 0.1), 5.0))
+        setScale(prevScale => {
+          const newScale = Math.min(Math.max(prevScale + delta, 0.1), 5.0)
+          // Zoom toward cursor: keep the graph point under the mouse fixed
+          const graphX = (mouseX - panRef.current.x) / prevScale
+          const graphY = (mouseY - panRef.current.y) / prevScale
+          setPan({
+            x: mouseX - graphX * newScale,
+            y: mouseY - graphY * newScale,
+          })
+          return newScale
+        })
       } else {
         // Trackpad two-finger scroll: small pixel-based deltas on both axes
         setPan(prev => ({
@@ -368,13 +394,17 @@ export function GraphPane() {
 
   // Step 4: Drag-to-pan using pan state (no native scrolling — container is overflow:hidden)
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault()
     isDraggingRef.current = false
     dragStartRef.current = {
       x: e.clientX, y: e.clientY,
       startPanX: panRef.current.x, startPanY: panRef.current.y,
     }
-    // Imperatively update cursor — no setState, no re-render
+    // Set cursor on container (covers area outside the SVG scaler during drag)
+    if (containerRef.current) containerRef.current.style.cursor = 'grabbing'
     if (scalerRef.current) scalerRef.current.style.cursor = 'grabbing'
+    // Prevent text selection anywhere on the page while dragging
+    document.body.style.userSelect = 'none'
   }, [])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
@@ -393,7 +423,10 @@ export function GraphPane() {
 
   const handleMouseUp = useCallback(() => {
     dragStartRef.current = null
+    if (containerRef.current) containerRef.current.style.cursor = 'grab'
     if (scalerRef.current) scalerRef.current.style.cursor = 'grab'
+    // Re-enable text selection after drag ends
+    document.body.style.userSelect = ''
     // Reset isDragging after click event has been processed
     setTimeout(() => { isDraggingRef.current = false }, 0)
   }, [])
@@ -463,6 +496,7 @@ export function GraphPane() {
       <div
         ref={containerRef}
         className="flex-1 overflow-hidden bg-gray-900 p-8"
+        style={{ cursor: 'grab' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -475,7 +509,6 @@ export function GraphPane() {
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
             transformOrigin: '0 0',
-            cursor: 'grab',
             display: 'inline-block',
           }}
           dangerouslySetInnerHTML={{ __html: svgContent }}

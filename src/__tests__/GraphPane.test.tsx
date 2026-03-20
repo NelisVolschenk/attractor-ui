@@ -859,6 +859,122 @@ describe('GraphPane', () => {
     })
   })
 
+  // ---------------------------------------------------------------------------
+  // Fix 1: Cursor on container + text selection prevention during drag
+  // ---------------------------------------------------------------------------
+
+  it('Fix 1: container cursor becomes grabbing on mousedown, grab on mouseup', async () => {
+    mockActivePipelineId.current = 'pipe-1'
+
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      expect(container.querySelector('svg')).toBeInTheDocument()
+    })
+
+    const graphContainer = container.querySelector('.bg-gray-900') as HTMLElement
+
+    // Before mousedown: cursor should not be grabbing
+    expect(graphContainer.style.cursor).not.toBe('grabbing')
+
+    // Simulate mousedown
+    fireEvent.mouseDown(graphContainer, { clientX: 100, clientY: 100 })
+
+    // Container itself should now show grabbing cursor
+    expect(graphContainer.style.cursor).toBe('grabbing')
+
+    // Simulate mouseup
+    fireEvent.mouseUp(graphContainer)
+
+    // Container should revert to grab
+    expect(graphContainer.style.cursor).toBe('grab')
+  })
+
+  it('Fix 1: document.body.userSelect is none during drag, cleared on mouseup', async () => {
+    mockActivePipelineId.current = 'pipe-1'
+
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      expect(container.querySelector('svg')).toBeInTheDocument()
+    })
+
+    const graphContainer = container.querySelector('.bg-gray-900') as HTMLElement
+
+    // Before mousedown: userSelect should not be 'none'
+    expect(document.body.style.userSelect).not.toBe('none')
+
+    // Simulate mousedown
+    fireEvent.mouseDown(graphContainer, { clientX: 100, clientY: 100 })
+
+    // During drag: selection must be prevented
+    expect(document.body.style.userSelect).toBe('none')
+
+    // Simulate mouseup
+    fireEvent.mouseUp(graphContainer)
+
+    // After mouseup: userSelect should be cleared
+    expect(document.body.style.userSelect).toBe('')
+  })
+
+  // ---------------------------------------------------------------------------
+  // Fix 2: Wheel zoom anchors to mouse cursor position
+  // ---------------------------------------------------------------------------
+
+  it('Fix 2: discrete mouse wheel zoom adjusts pan to anchor zoom at cursor position', async () => {
+    // Before fix: scale changes but pan stays at 0,0 (zooms from top-left corner).
+    // After fix: pan shifts so the point under the cursor stays fixed.
+    // With JSDOM getBoundingClientRect returning {left:0, top:0}, mouseX=clientX, mouseY=clientY.
+    // At clientX=100, clientY=50, scale 1.5→1.35:
+    //   graphX = 100/1.5 = 66.67, graphY = 50/1.5 = 33.33
+    //   newPanX = 100 - 66.67*1.35 ≈ 10, newPanY = 50 - 33.33*1.35 ≈ 5
+    mockActivePipelineId.current = 'pipe-1'
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      expect(container.querySelector('svg')).toBeInTheDocument()
+    })
+
+    const graphContainer = container.querySelector('.bg-gray-900') as HTMLElement
+    const scalerDiv = container.querySelector('[style*="scale"]') as HTMLElement
+
+    // Fire a discrete wheel event (large deltaY, no ctrlKey) at a non-zero position
+    fireEvent.wheel(graphContainer, {
+      deltaY: 120, deltaX: 0, ctrlKey: false, clientX: 100, clientY: 50,
+    })
+
+    await waitFor(() => {
+      // Pan must shift — not stay at 0,0 — because zoom anchors at cursor position
+      expect(scalerDiv.style.transform).not.toContain('translate(0px, 0px)')
+    })
+  })
+
+  it('Fix 2: pinch-to-zoom (ctrlKey+wheel) adjusts pan to anchor zoom at cursor position', async () => {
+    // Same algorithm but via the ctrlKey branch (pinch / Ctrl+scroll).
+    // At clientX=100, clientY=50, scale 1.5+0.2=1.7:
+    //   graphX = 100/1.5 = 66.67, graphY = 50/1.5 = 33.33
+    //   newPanX = 100 - 66.67*1.7 ≈ -13.3, newPanY = 50 - 33.33*1.7 ≈ -6.7
+    mockActivePipelineId.current = 'pipe-1'
+    const { container } = render(<GraphPane />)
+
+    await waitFor(() => {
+      expect(container.querySelector('svg')).toBeInTheDocument()
+    })
+
+    const graphContainer = container.querySelector('.bg-gray-900') as HTMLElement
+    const scalerDiv = container.querySelector('[style*="scale"]') as HTMLElement
+
+    // Fire a pinch-zoom event at a non-zero position
+    fireEvent.wheel(graphContainer, {
+      deltaY: -20, deltaX: 0, ctrlKey: true, clientX: 100, clientY: 50,
+    })
+
+    await waitFor(() => {
+      // Pan must shift — not stay at 0,0 — because zoom anchors at cursor position
+      expect(scalerDiv.style.transform).not.toContain('translate(0px, 0px)')
+    })
+  })
+
   it('UI-BUG-021: parallel_branch_started alone colors node yellow (#eab308)', async () => {
     mockActivePipelineId.current = 'pipe-1'
     mockEvents.current = new Map([
